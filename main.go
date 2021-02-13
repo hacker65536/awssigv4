@@ -23,6 +23,10 @@ func main() {
 
 	key := os.Getenv("AWS_ACCESS_KEY_ID")
 	sec := os.Getenv("AWS_SECRET_ACCESS_KEY")
+	if key == "" || sec == "" {
+		fmt.Println("no credentials")
+		os.Exit(2)
+	}
 	//region := "us-east-2"
 	region := os.Getenv("AWS_REGION")
 	if region == "" {
