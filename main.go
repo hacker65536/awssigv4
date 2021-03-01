@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"strings"
 
 	"github.com/hacker65536/awssigv4/pkg/awssigv4"
 )
@@ -36,7 +38,7 @@ func main() {
 	svc := os.Args[1]
 	//act := "describe-vpcs"
 	act := os.Args[2]
-	method := "GET"
+	method := "POST"
 
 	aws4 := awssigv4.New()
 	aws4.Method = method
@@ -44,17 +46,27 @@ func main() {
 	aws4.Svc = svc
 	date := aws4.RequestDateTime
 	headers := map[string]string{
-		"Host":       svc + "." + region + "." + "amazonaws.com",
-		"X-Amz-Date": date,
+		"Host":         svc + "." + region + "." + "amazonaws.com",
+		"X-Amz-Date":   date,
+		"Content-type": "application/x-www-form-urlencoded; charset=utf-8",
 	}
 	aws4.Headers = headers
 	aws4.Action = act
 
-	url := aws4.CreateURL()
+	URL := aws4.CreateURL()
 	auth := aws4.CreateAuthorizationHeader(key, sec)
-	req, _ := http.NewRequest(method, url, nil)
+
+	req, _ := http.NewRequest(method, URL, nil)
+	if method == "POST" {
+		//req, _ = http.NewRequest("POST", URL, bytes.NewBuffer([]byte(aws4.Payload)))
+
+		req.Body = ioutil.NopCloser(strings.NewReader(aws4.Payload))
+		req.ContentLength = int64(len(aws4.Payload))
+	}
+
 	req.Header.Set("Authorization", auth)
 	req.Header.Set("X-Amz-Date", date)
+	req.Header.Set("Content-type", "application/x-www-form-urlencoded; charset=utf-8")
 
 	dumpReq, _ := httputil.DumpRequestOut(req, true)
 

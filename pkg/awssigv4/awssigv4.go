@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ var (
 	apisVersion = map[string]string{
 		"ec2": "2016-11-15",
 		"sts": "2011-06-15",
+		"rds": "2014-10-31",
 	}
 )
 
@@ -70,10 +72,10 @@ func New() *AWSSigv4 {
 }
 
 func sign(k string, d string) []byte {
-	mac := hmac.New(sha256.New, []byte(k))
-	mac.Write([]byte(d))
-	macSum := mac.Sum(nil)
-	return macSum
+	nhmac := hmac.New(sha256.New, []byte(k))
+	nhmac.Write([]byte(d))
+	nhmacSum := nhmac.Sum(nil)
+	return nhmacSum
 }
 
 func kebabToCamelCase(kebab string) (camelCase string) {
@@ -90,10 +92,14 @@ func kebabToCamelCase(kebab string) (camelCase string) {
 			}
 		}
 	}
+
+	// for rds API
+	reg := regexp.MustCompile(`Db`)
+	camelCase = reg.ReplaceAllString(camelCase, "DB")
 	return
 }
 
-// CreateURL is a func returns the URL which generated with parameter
+// CreateURL is a func returns the URL which generated from parameter
 func (a *AWSSigv4) CreateURL() string {
 
 	qs := a.QueryString
@@ -121,20 +127,20 @@ func (a *AWSSigv4) createCanonicalRequest() string {
 	creq += a.createCanonicalURI() + "\n"
 	creq += a.createCanonicalQueryString() + "\n"
 
-	canonicalHeaders, signedHeaders := a.createCanonicalHeaders()
+	cheaders, sheaders := a.createCanonicalHeaders()
 
-	creq += canonicalHeaders + "\n"
-	creq += signedHeaders + "\n"
+	creq += cheaders + "\n"
+	creq += sheaders + "\n"
 	creq += a.createHashedPayload()
 
 	return creq
 }
 
 func (a *AWSSigv4) createCanonicalURI() string {
-	uriSegment := strings.Split(a.URI, "/")
+	uriseg := strings.Split(a.URI, "/")
 	ary := []string{}
 
-	for _, v := range uriSegment {
+	for _, v := range uriseg {
 
 		v2 := v
 		if v != "" {
@@ -179,13 +185,13 @@ func (a *AWSSigv4) createCanonicalQueryString() string {
 
 func (a *AWSSigv4) createCanonicalHeaders() (string, string) {
 
-	h := a.Headers
-	ch := ""
-	m1 := make([]string, len(h))
-	m2 := make(map[string]string, len(h))
+	headers := a.Headers
+	cheaders := ""
+	m1 := make([]string, len(headers))
+	m2 := make(map[string]string, len(headers))
 
 	i := 0
-	for k, v := range h {
+	for k, v := range headers {
 		hn := strings.ToLower(k)
 		m1[i] = hn
 		m2[hn] = v
@@ -195,23 +201,28 @@ func (a *AWSSigv4) createCanonicalHeaders() (string, string) {
 	sort.Strings(m1)
 
 	for i := 0; i < len(m1); i++ {
-		ch += m1[i] + ":" + strings.Join(strings.Fields(strings.TrimSpace(m2[m1[i]])), " ") + "\n"
+		cheaders += m1[i] + ":" + strings.Join(strings.Fields(strings.TrimSpace(m2[m1[i]])), " ") + "\n"
 	}
 
-	return ch, strings.Join(m1, ";")
+	sheaders := strings.Join(m1, ";")
+	return cheaders, sheaders
 }
 
 func (a *AWSSigv4) createHashedPayload() string {
+	if a.Method == "POST" {
+		ver := apisVersion[a.Svc]
+		a.Payload = "Action=" + kebabToCamelCase(a.Action) + "&Version=" + ver
+	}
 	p := a.Payload
 	hash := sha256.Sum256([]byte(p))
 	return strings.ToLower(hex.EncodeToString(hash[:]))
 }
 
-func (a *AWSSigv4) createStringToSign(credentialSope, canonicalRequest string) string {
+func (a *AWSSigv4) createStringToSign(credentialScope, canonicalRequest string) string {
 
 	s := getAlgorithm() + "\n"
 	s += a.RequestDateTime + "\n"
-	s += credentialSope + "\n"
+	s += credentialScope + "\n"
 	hash := sha256.Sum256([]byte(canonicalRequest))
 	s += hex.EncodeToString(hash[:])
 
@@ -243,22 +254,22 @@ func (a *AWSSigv4) createSignature(sigkey, sigstr string) string {
 	return hex.EncodeToString(sign(string(sigkey), sigstr))
 }
 
-func (a *AWSSigv4) CreateAuthorizationHeader(accesskeyid, secret string) string {
+// CreateAuthorizationHeader is create authrozation header for prepare to call rest api
+func (a *AWSSigv4) CreateAuthorizationHeader(keyid, secret string) string {
 	_, shs := a.createCanonicalHeaders()
 
-	s := a.createSignatureKey(secret)
-	sigkey := s
+	sigkey := a.createSignatureKey(secret)
 	cs := a.createCredentialScope()
 	cr := a.createCanonicalRequest()
 	sigstr := a.createStringToSign(cs, cr)
 
 	sig := a.createSignature(string(sigkey), sigstr)
 
-	r := a.Algorithm + " "
-	r += "Credential=" + accesskeyid + "/"
-	r += a.createCredentialScope() + ", "
-	r += "SignedHeaders=" + shs + ", "
-	r += "Signature=" + sig
+	authheader := a.Algorithm + " "
+	authheader += "Credential=" + keyid + "/"
+	authheader += a.createCredentialScope() + ", "
+	authheader += "SignedHeaders=" + shs + ", "
+	authheader += "Signature=" + sig
 
-	return r
+	return authheader
 }
